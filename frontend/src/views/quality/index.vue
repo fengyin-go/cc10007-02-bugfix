@@ -38,6 +38,7 @@
         <tr>
           <th v-for="column in columns" :key="column">{{ column }}</th>
           <th>当前状态</th>
+          <th>上游信号</th>
           <th>可执行动作</th>
         </tr>
       </thead>
@@ -45,6 +46,11 @@
         <tr v-for="row in rows" :key="String(row.id)">
           <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
           <td>{{ row.status }}</td>
+          <td :class="signalOf(row).effectiveStatus === '已启用（上游失效）' ? 'signal-bad' : 'muted'">
+            {{ signalOf(row).effectiveStatus === '已启用（上游失效）'
+              ? signalOf(row).reasons[0]
+              : signalOf(row).effectiveStatus }}
+          </td>
           <td class="row-actions">
             <button
               v-for="action in actions"
@@ -58,7 +64,7 @@
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="columns.length + 2" class="empty-state">暂无质量校验数据，可先登记质量规则</td>
+          <td :colspan="columns.length + 3" class="empty-state">暂无质量校验数据，可先登记质量规则</td>
         </tr>
       </tbody>
     </table>
@@ -75,11 +81,11 @@ import { computed, onMounted, ref } from 'vue'
 
 import {
   downloadEntries,
-  listEntries,
+  listQualityEntries,
   moduleMeta,
   runAction as applyAction,
 } from '@/api/local-service'
-import type { EntryRow } from '@/data/types'
+import type { EntryRow, QualitySignal } from '@/data/types'
 
 const meta = moduleMeta('quality')
 const columns = ["规则编号", "校验表名", "目标字段", "校验表达式", "阈值下界", "阈值上界", "采样比例", "阻断级别"]
@@ -88,6 +94,7 @@ const statuses = ["草稿", "待校验", "已启用", "已停用"]
 const stats = [{"label": "质量规则总数", "value": 0}, {"label": "已启用规则", "value": 0}, {"label": "待校验规则", "value": 0}]
 
 const rows = ref<EntryRow[]>([])
+const signals = ref<QualitySignal[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
@@ -98,6 +105,20 @@ const statusSummary = computed(() =>
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+function signalOf(row: EntryRow): QualitySignal {
+  return (
+    signals.value.find((item) => item.rule === String(row['规则编号'])) ?? {
+      id: Number(row.id),
+      rule: String(row['规则编号'] ?? ''),
+      table: String(row['校验表名'] ?? ''),
+      status: String(row.status),
+      effectiveStatus: String(row.status),
+      ok: false,
+      reasons: ['列表快照缺失'],
+    }
+  )
+}
 
 function resetFilters() {
   filters.value = {}
@@ -125,8 +146,9 @@ function runAction(action: string, row: EntryRow) {
 function reload() {
   errorMessage.value = ''
   try {
-    const payload = listEntries(meta.key, filters.value)
+    const payload = listQualityEntries(meta.key, filters.value)
     rows.value = payload.items
+    signals.value = payload.signals
     total.value = payload.total
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '质量校验列表读取失败'

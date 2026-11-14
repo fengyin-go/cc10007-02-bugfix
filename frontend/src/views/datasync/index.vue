@@ -38,6 +38,7 @@
         <tr>
           <th v-for="column in columns" :key="column">{{ column }}</th>
           <th>当前状态</th>
+          <th>启动前置</th>
           <th>可执行动作</th>
         </tr>
       </thead>
@@ -45,6 +46,9 @@
         <tr v-for="row in rows" :key="String(row.id)">
           <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
           <td>{{ row.status }}</td>
+          <td :class="healthOf(row).startable ? 'signal-ok' : 'signal-bad'">
+            {{ healthOf(row).startable ? '可启动' : healthOf(row).reasons[0] ?? '不可启动' }}
+          </td>
           <td class="row-actions">
             <button
               v-for="action in actions"
@@ -58,7 +62,7 @@
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="columns.length + 2" class="empty-state">暂无数据同步数据，可先登记同步链路</td>
+          <td :colspan="columns.length + 3" class="empty-state">暂无数据同步数据，可先登记同步链路</td>
         </tr>
       </tbody>
     </table>
@@ -75,19 +79,20 @@ import { computed, onMounted, ref } from 'vue'
 
 import {
   downloadEntries,
-  listEntries,
+  listSyncEntries,
   moduleMeta,
   runAction as applyAction,
 } from '@/api/local-service'
-import type { EntryRow } from '@/data/types'
+import type { EntryRow, SyncHealth } from '@/data/types'
 
 const meta = moduleMeta('datasync')
-const columns = ["链路编号", "源端连接", "目标端连接", "同步表列表", "全量增量标识", "同步频率", "延迟阈值", "告警接收人"]
+const columns = ["链路编号", "源端连接", "目标端连接", "同步表列表", "全量增量标识", "回放批次", "同步频率", "延迟阈值", "告警接收人"]
 const actions = ["提交校验", "启动同步", "停止同步"]
 const statuses = ["草稿", "待校验", "运行中", "已停止"]
 const stats = [{"label": "同步链路总数", "value": 0}, {"label": "运行中链路", "value": 0}, {"label": "待校验链路", "value": 0}]
 
 const rows = ref<EntryRow[]>([])
+const healths = ref<SyncHealth[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
@@ -98,6 +103,25 @@ const statusSummary = computed(() =>
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+function healthOf(row: EntryRow): SyncHealth {
+  return (
+    healths.value.find((item) => item.code === String(row['链路编号'])) ?? {
+      id: Number(row.id),
+      code: String(row['链路编号'] ?? ''),
+      status: String(row.status),
+      effectiveStatus: String(row.status),
+      startable: false,
+      statusInvalid: false,
+      sourceRef: String(row['源端连接'] ?? ''),
+      sourceStatus: '',
+      linkedOds: String(row['同步表列表'] ?? ''),
+      linkedOdsStatus: '',
+      replayOk: false,
+      reasons: ['列表快照缺失'],
+    }
+  )
+}
 
 function resetFilters() {
   filters.value = {}
@@ -125,8 +149,9 @@ function runAction(action: string, row: EntryRow) {
 function reload() {
   errorMessage.value = ''
   try {
-    const payload = listEntries(meta.key, filters.value)
+    const payload = listSyncEntries(meta.key, filters.value)
     rows.value = payload.items
+    healths.value = payload.healths
     total.value = payload.total
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '数据同步列表读取失败'
